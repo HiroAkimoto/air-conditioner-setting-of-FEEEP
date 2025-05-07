@@ -110,7 +110,7 @@ def set_temp(t_avg: float, rh_avg: float, mode: str):
         if rh_avg<=40: t+=0.5
         return round(float(np.clip(t,20,24))*2)/2
     if mode == "自動":
-        return 24.0
+        return 23.5
     return None  # 送風
 
 # ----------------------------------
