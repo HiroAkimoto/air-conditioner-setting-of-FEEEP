@@ -226,7 +226,7 @@ def main():
         unsafe_allow_html=True,
     )
 
-    temp_display = "設定不要 (送風)" if t_set is None else f"<span class='big-bold'>{t_set:.1f}°C</span>"
+    temp_display = "設定不要" if t_set is None else f"<span class='big-bold'>{t_set:.1f}°C</span>"
     st.markdown(f"**設定温度**: {temp_display}", unsafe_allow_html=True)
 
 
