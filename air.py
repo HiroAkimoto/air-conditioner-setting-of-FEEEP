@@ -23,10 +23,12 @@ A_COOL = 25.320513  # 基本オフセット
 B_COOL = 0.320513   # 温度係数 (30°C を基点に逆比例)
 C_COOL = -0.0384615 # 湿度係数 (55% を基点に負方向で下げる)
 
+# ★ 除湿モードは冷房目標＋1 °C で緩めに設定
+DRY_OFFSET = 1.0
+
 # -----------------------------------------------------------------------------
 # UTILS
 # -----------------------------------------------------------------------------
-
 def millis_until_midnight() -> int:
     """Return milliseconds until the next midnight in Asia/Tokyo."""
     now = datetime.now(TZ)
@@ -41,10 +43,8 @@ def round_half_down(x: float) -> float:
 # -----------------------------------------------------------------------------
 # GOOGLE SHEET (I/O)
 # -----------------------------------------------------------------------------
-
 def load_stores() -> pd.DataFrame:
     """Load store name & lat/lon from Google Sheet."""
-
     try:
         raw = pd.read_csv(SHEET_CSV, header=None)
     except Exception as exc:
@@ -81,9 +81,8 @@ def load_stores() -> pd.DataFrame:
 # -----------------------------------------------------------------------------
 # WEATHER
 # -----------------------------------------------------------------------------
-
 def fetch_weather(lat: float, lon: float, date: str):
-    """Fetch 24‑hour hourly weather data for *date* (ISO‑YYYY‑MM‑DD)."""
+    """Fetch 24-hour hourly weather data for *date* (ISO-YYYY-MM-DD)."""
     params = {
         "latitude": lat,
         "longitude": lon,
@@ -96,11 +95,11 @@ def fetch_weather(lat: float, lon: float, date: str):
         resp = requests.get(WEATHER_API, params=params, timeout=10)
         resp.raise_for_status()
         if "application/json" not in resp.headers.get("Content-Type", ""):
-            st.warning("Open‑Meteo が JSON を返さなかったためスキップします。")
+            st.warning("Open-Meteo が JSON を返さなかったためスキップします。")
             return None
         return resp.json().get("hourly", {})
     except Exception as exc:
-        st.error(f"Open‑Meteo 取得失敗: {exc}")
+        st.error(f"Open-Meteo 取得失敗: {exc}")
         return None
 
 
@@ -114,64 +113,55 @@ def summarize(hourly):
 # -----------------------------------------------------------------------------
 # CONTROL LOGIC
 # -----------------------------------------------------------------------------
-
 def choose_mode(t_avg: float, rh_avg: float) -> str:
-    """Determine HVAC mode by temperature & humidity.
+    """Determine HVAC mode.
 
-    • 湿度 65 %以上 → 『除湿』を優先。
-    • それ以外は気温ベース。
+    ・湿度 65 %以上       → 除湿（ドライ）
+    ・気温 15 °C 以下     → 暖房
+    ・その他すべて        → 冷房
+    （自動／送風モードは廃止）
     """
     if rh_avg >= 65:
         return "除湿（ドライ）"
-    if t_avg >= 25:
-        return "冷房"
     if t_avg <= 15:
         return "暖房"
-    if 21 < t_avg < 25:
-        return "自動"
-    return "送風"
+    return "冷房"
 
-
-# ---- 温度設定 ----
-
+# ---- 温度設定 --------------------------------------------------------------
 def _cooling_target(t_avg: float, rh_avg: float) -> float:
-    """Calculate cooling target temperature (°C)."""
+    """冷房モード目標温度（°C）"""
     base = A_COOL - B_COOL * (t_avg - 30) + C_COOL * (rh_avg - 55)
-
-    # 追加湿度補正
     if rh_avg >= 60:
-        base -= 0.5  # 除湿寄りに下げる
+        base -= 0.5
     if rh_avg <= 40:
-        base += 0.5  # 乾燥時は上げる
-
-    # 22–28 °C に収め、0.5 °C 刻みで *切り捨て*
+        base += 0.5
     return round_half_down(np.clip(base, 22, 28))
-
 
 def _heating_target(t_avg: float, rh_avg: float) -> float:
     base = 22 + 0.15 * (18 - t_avg) + 0.04 * (55 - rh_avg)
-
     if rh_avg >= 60:
         base -= 0.5
     if rh_avg <= 40:
         base += 0.5
     return round_half_down(np.clip(base, 20, 24))
 
+# ★ 除湿モードは冷房目標より +1 °C
+def _dry_target(t_avg: float, rh_avg: float) -> float:
+    return round_half_down(np.clip(_cooling_target(t_avg, rh_avg) + DRY_OFFSET, 22, 28))
 
 def set_temp(t_avg: float, rh_avg: float, mode: str):
-    """Return target temperature (°C) by mode or None (送風)."""
+    """モード別 目標設定温度（°C）"""
     if mode == "冷房":
         return _cooling_target(t_avg, rh_avg)
     if mode == "暖房":
         return _heating_target(t_avg, rh_avg)
-    if mode == "自動":
-        return 22.0 if rh_avg <= 40 else 23.5
-    return None  # 送風
+    if mode.startswith("除湿"):
+        return _dry_target(t_avg, rh_avg)
+    return None  # 想定外
 
 # -----------------------------------------------------------------------------
 # STREAMLIT UI
 # -----------------------------------------------------------------------------
-
 def _inject_css():
     st.markdown(
         """
@@ -191,14 +181,13 @@ def _inject_css():
         unsafe_allow_html=True,
     )
 
-
 def main():
     st.set_page_config(page_title="FEEEP AC Settings", layout="centered")
     st_autorefresh(interval=millis_until_midnight(), key="midnight")
 
     today = datetime.now(TZ).date()
     st.title("FEEEP エアコン設定ガイド")
-    st.caption(f"{today:%Y-%m-%d} の 10–17 時平均データを基に算出 (Open‑Meteo)")
+    st.caption(f"{today:%Y-%m-%d} の 10–17 時平均データを基に算出 (Open-Meteo)")
 
     stores = load_stores()
     if stores.empty:
@@ -226,9 +215,11 @@ def main():
         unsafe_allow_html=True,
     )
 
-    temp_display = "設定不要" if t_set is None else f"<span class='big-bold'>{t_set:.1f}°C</span>"
+    temp_display = (
+        "設定不要" if t_set is None
+        else f"<span class='big-bold'>{t_set:.1f}°C</span>"
+    )
     st.markdown(f"**設定温度**: {temp_display}", unsafe_allow_html=True)
-
 
 if __name__ == "__main__":
     main()
