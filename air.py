@@ -185,10 +185,20 @@ def main():
     st.set_page_config(page_title="FEEEP AC Settings", layout="centered")
     st_autorefresh(interval=millis_until_midnight(), key="midnight")
 
+    # --- 対象日選択 ----------------------------------------------------------
     today = datetime.now(TZ).date()
-    st.title("FEEEP エアコン設定ガイド")
-    st.caption(f"{today:%Y-%m-%d} の 10–17 時平均データを基に算出 (Open-Meteo)")
+    options = {
+        "今日": today,
+        "明日": today + timedelta(days=1),
+    }
+    day_choice = st.radio("対象日を選択", list(options.keys()), horizontal=True)
+    target_date = options[day_choice]
 
+    # --- UI ヘッダ -----------------------------------------------------------
+    st.title("FEEEP エアコン設定ガイド")
+    st.caption(f"{target_date:%Y-%m-%d} の 10–17 時平均データを基に算出 (Open-Meteo)")
+
+    # --- 店舗ロード & 選択 ---------------------------------------------------
     stores = load_stores()
     if stores.empty:
         st.stop()
@@ -196,7 +206,8 @@ def main():
     selected = st.selectbox("店舗を選択", stores["store"].tolist(), index=0)
     lat, lon = stores.loc[stores["store"] == selected, ["lat", "lon"]].iloc[0]
 
-    hourly = fetch_weather(float(lat), float(lon), today.isoformat())
+    # --- 天気取得 ------------------------------------------------------------
+    hourly = fetch_weather(float(lat), float(lon), target_date.isoformat())
     if not hourly:
         st.warning("気象データ取得に失敗しました。")
         st.stop()
@@ -205,6 +216,7 @@ def main():
     mode = choose_mode(t_avg, rh_avg)
     t_set = set_temp(t_avg, rh_avg, mode)
 
+    # --- 表示 ---------------------------------------------------------------
     _inject_css()
 
     st.subheader(selected)
@@ -220,6 +232,7 @@ def main():
         else f"<span class='big-bold'>{t_set:.1f}°C</span>"
     )
     st.markdown(f"**設定温度**: {temp_display}", unsafe_allow_html=True)
+
 
 if __name__ == "__main__":
     main()
